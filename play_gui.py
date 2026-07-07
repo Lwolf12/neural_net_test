@@ -41,22 +41,45 @@ DEFAULTS = {
 }
 
 
-def load_settings():
-    """Last-used settings, falling back to DEFAULTS for anything missing."""
+def _read_store():
     try:
         with open(SETTINGS_FILE) as f:
-            saved = json.load(f)
-        return {k: saved.get(k, DEFAULTS[k]) for k in DEFAULTS}
+            return json.load(f)
     except (OSError, ValueError):
-        return dict(DEFAULTS)
+        return {}
+
+
+def _write_store(data):
+    try:
+        with open(SETTINGS_FILE, "w") as f:
+            json.dump(data, f, indent=2)
+    except OSError:
+        pass
+
+
+def load_settings():
+    """Last-used settings, falling back to DEFAULTS for anything missing."""
+    saved = _read_store()
+    return {k: saved.get(k, DEFAULTS[k]) for k in DEFAULTS}
 
 
 def save_settings(settings):
-    try:
-        with open(SETTINGS_FILE, "w") as f:
-            json.dump({k: settings[k] for k in DEFAULTS}, f, indent=2)
-    except OSError:
-        pass
+    # Read-modify-write so unrelated keys (e.g. the window position) survive.
+    data = _read_store()
+    for k in DEFAULTS:
+        data[k] = settings[k]
+    _write_store(data)
+
+
+def load_window():
+    """Saved window position string ("+x+y"), or None."""
+    return _read_store().get("window")
+
+
+def save_window(position):
+    data = _read_store()
+    data["window"] = position
+    _write_store(data)
 
 # Palette.
 BG = "#1b1b1f"
@@ -621,12 +644,33 @@ class App:
         self.current = None
 
         self._style()
+        self._restore_window()
+        root.protocol("WM_DELETE_WINDOW", self._on_close)
         root.bind("<Return>", self._on_return)
         for seq in ("<Left>", "<BackSpace>", "<Control-z>"):
             root.bind(seq, self._on_takeback)
         for seq in ("<Right>", "<Control-y>"):
             root.bind(seq, self._on_forward)
         self._show_setup()
+
+    # ---- window position memory --------------------------------------
+    def _restore_window(self):
+        pos = load_window()
+        if pos:
+            try:
+                self.root.geometry(pos)  # position only ("+x+y"); size is content-driven
+            except tk.TclError:
+                pass
+
+    def _on_close(self):
+        try:
+            geom = self.root.geometry()  # "WxH+X+Y"
+            idx = next((i for i, ch in enumerate(geom) if ch in "+-"), -1)
+            if idx > 0:
+                save_window(geom[idx:])
+        except tk.TclError:
+            pass
+        self.root.destroy()
 
     def _on_return(self, _event):
         # Enter on the setup screen starts the game immediately.
