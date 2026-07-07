@@ -169,8 +169,9 @@ it was trained, and "thinks" on a background thread so the UI never freezes.
 
 ## Running
 
-Use the project's venv Python, from the project root. (Bare `python` on this machine
-is a broken Microsoft Store stub — always use the venv exe.)
+Python with requirements.txt installed. 
+
+typically with the python venv (.venv) activated
 
 ```powershell
 # Train from the command line

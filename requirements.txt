@@ -1,0 +1,18 @@
+# Python dependencies for the Connect 4 self-play AI.
+#
+# GPU (NVIDIA, e.g. RTX 4080) — recommended for training. Installs the CUDA build:
+#     pip install -r requirements.txt
+#
+# CPU-only machine: comment out the two CUDA lines below and uncomment the plain
+# "torch" line instead (smaller download). The code auto-falls back to CPU when
+# no GPU is present, and playing against the AI does not need a GPU at all.
+#
+# Note: tkinter (used by the GUIs) ships with Python's standard library and is
+# NOT a pip package. On most Linux distros install the system package
+# "python3-tk"; the standard Windows/macOS Python installers already include it.
+
+--extra-index-url https://download.pytorch.org/whl/cu128
+torch==2.11.0+cu128
+# torch==2.11.0           # CPU-only alternative (use instead of the +cu128 line above)
+
+numpy==2.5.1
