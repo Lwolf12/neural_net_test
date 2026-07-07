@@ -259,14 +259,20 @@ class GameScreen(ttk.Frame):
         self.on_setup = on_setup
 
         self.ptype = {1: settings["p1"], -1: settings["p2"]}
+        # The game is a line of moves (columns) plus a cursor into it. Take-back
+        # moves the cursor back; forward moves it toward the line's tip; a new
+        # move truncates any "future" beyond the cursor. The board / to_play /
+        # winner are always derived from line[:cursor] by _apply_cursor().
+        self.line = []
+        self.cursor = 0
         self.board = self.game.new_board()
         self.to_play = 1
+        self.winner = None
         self.busy = False
         self.game_over = False
         self.hover_col = None
         self.win_cells = set()
         self.result_q = queue.Queue()
-        self.history = []  # (board, to_play) snapshots, one per move played
 
         # Header.
         header = ttk.Frame(self)
@@ -289,18 +295,22 @@ class GameScreen(ttk.Frame):
         controls = ttk.Frame(self)
         controls.pack(fill="x", pady=(10, 0))
         ttk.Button(controls, text="↻  New game", style="Accent.TButton",
-                   command=self.on_new).pack(side="left")
+                   command=self._confirm_new).pack(side="left")
         self.takeback_btn = ttk.Button(controls, text="↶  Take back",
-                                       command=self.take_back)
-        self.takeback_btn.pack(side="left", padx=8)
-        ttk.Button(controls, text="⚙  Setup", command=self.on_setup).pack(side="left")
+                                        command=self.take_back)
+        self.takeback_btn.pack(side="left", padx=(8, 2))
+        self.forward_btn = ttk.Button(controls, text="Forward  ↷",
+                                      command=self.redo)
+        self.forward_btn.pack(side="left", padx=(0, 8))
+        ttk.Button(controls, text="⚙  Setup",
+                   command=self._confirm_setup).pack(side="left")
         self.subtitle = tk.StringVar()
         ttk.Label(controls, textvariable=self.subtitle, style="Muted.TLabel").pack(side="right")
 
         self._describe_matchup()
-        self._draw()
         self.after(120, self._poll_ai)
-        self._advance()
+        self._apply_cursor()
+        self._render_after_move()
 
     # ---- matchup / status -------------------------------------------
     def _describe_matchup(self):
@@ -308,12 +318,49 @@ class GameScreen(ttk.Frame):
             return "Computer" if self.ptype[p] == "computer" else "Human"
         self.subtitle.set(f"Red: {who(1)}   ·   Yellow: {who(-1)}   ·   "
                           f"{self.rows}×{self.cols} connect {self.connect}   ·   "
-                          f"←/Backspace: take back")
+                          f"←/→: take back / forward")
+
+    # ---- navigation (undo / redo over the move line) -----------------
+    def _apply_cursor(self):
+        """Rebuild board / to_play / winner by replaying line[:cursor]."""
+        board = self.game.new_board()
+        last = None
+        for i in range(self.cursor):
+            player = 1 if i % 2 == 0 else -1
+            board, row = self.game.apply_move(board, self.line[i], player)
+            last = (row, self.line[i], player)
+
+        self.board = board
+        self.to_play = 1 if self.cursor % 2 == 0 else -1
+        self.game_over = False
+        self.winner = None
+        self.win_cells = set()
+        if last and self.game.is_win_at(board, last[0], last[1]):
+            self.game_over = True
+            self.winner = last[2]
+            self.win_cells = self._winning_cells(last[0], last[1], last[2])
+        elif self.game.is_full(board):
+            self.game_over = True  # draw (winner stays None)
+
+    def _render_after_move(self):
+        """Redraw and either declare the result or hand off to the next player."""
+        self.busy = False
+        self.hover_col = None
+        self._draw()
+        if self.game_over:
+            if self.winner is None:
+                text, color = "Draw — board full", MUTED
+            else:
+                text, color = f"★  {NAME[self.winner]} wins!  ★", DISC[self.winner][0]
+            self.status.set(text)
+            self._status_color(color)
+            self._banner(text, color)
+            self._update_nav()
+        else:
+            self._advance()
 
     def _advance(self):
         """Decide what happens next after the position changed."""
-        if self.game_over:
-            return
         color = DISC[self.to_play][0]
         name = NAME[self.to_play]
         if self.ptype[self.to_play] == "computer":
@@ -323,11 +370,13 @@ class GameScreen(ttk.Frame):
         else:
             self.status.set(f"{name}'s turn — click a column")
             self._status_color(color)
-        self._update_takeback()
+        self._update_nav()
 
-    def _update_takeback(self):
-        can_undo = (not self.busy) and bool(self.history)
-        self.takeback_btn.config(state=("normal" if can_undo else "disabled"))
+    def _update_nav(self):
+        undo = (not self.busy) and self.cursor > 0
+        redo = (not self.busy) and self.cursor < len(self.line)
+        self.takeback_btn.config(state=("normal" if undo else "disabled"))
+        self.forward_btn.config(state=("normal" if redo else "disabled"))
 
     def take_back(self):
         """Rewind to the previous position where a human is to move.
@@ -336,19 +385,56 @@ class GameScreen(ttk.Frame):
         press; repeat to go back further, all the way to the start. In
         Human-vs-Human it undoes a single ply.
         """
-        if self.busy or not self.history:
+        if self.busy or self.cursor == 0:
             return
         human_exists = "human" in (self.ptype[1], self.ptype[-1])
-        while self.history:
-            self.board, self.to_play = self.history.pop()
-            if not human_exists or self.ptype[self.to_play] == "human":
+        c = self.cursor
+        while c > 0:
+            c -= 1
+            side = 1 if c % 2 == 0 else -1
+            if not human_exists or self.ptype[side] == "human":
                 break
-        self.game_over = False
-        self.win_cells = set()
-        self.busy = False
-        self.hover_col = None
-        self._draw()
-        self._advance()
+        self.cursor = c
+        self._apply_cursor()
+        self._render_after_move()
+
+    def redo(self):
+        """Move forward again over moves that were taken back, up to the
+        original position (the line's tip). Mirrors take_back."""
+        if self.busy or self.cursor >= len(self.line):
+            return
+        human_exists = "human" in (self.ptype[1], self.ptype[-1])
+        c, n = self.cursor, len(self.line)
+        while c < n:
+            c += 1
+            if c == n:
+                break  # reached the tip (which may be a finished game)
+            side = 1 if c % 2 == 0 else -1
+            if not human_exists or self.ptype[side] == "human":
+                break
+        self.cursor = c
+        self._apply_cursor()
+        self._render_after_move()
+
+    # ---- cancel-guarding the New game / Setup buttons ----------------
+    def _game_in_progress(self):
+        return self.cursor > 0 and not self.game_over
+
+    def _confirm_new(self):
+        if self._game_in_progress() and not messagebox.askyesno(
+                "Cancel current game?",
+                "A game is in progress — starting a new game will end it.\n\n"
+                "Start a new game?"):
+            return
+        self.on_new()
+
+    def _confirm_setup(self):
+        if self._game_in_progress() and not messagebox.askyesno(
+                "Cancel current game?",
+                "A game is in progress — returning to setup will end it.\n\n"
+                "Return to setup?"):
+            return
+        self.on_setup()
 
     def _status_color(self, color):
         # Recolour the status label to the side to move.
@@ -417,32 +503,15 @@ class GameScreen(ttk.Frame):
         self.hover_col = None
         player = self.to_play
         row = self.game._landing_row(self.board, col)
-        self._animate(col, row, player, lambda: self._land(col, row, player))
+        self._animate(col, row, player, lambda: self._land(col))
 
-    def _land(self, col, row, player):
-        self.history.append((self.board.copy(), self.to_play))
-        self.board, _ = self.game.apply_move(self.board, col, player)
-        if self.game.is_win_at(self.board, row, col):
-            self.win_cells = self._winning_cells(row, col, player)
-            self._draw()
-            self._declare(f"★  {NAME[player]} wins!  ★", DISC[player][0])
-            return
-        if self.game.is_full(self.board):
-            self._draw()
-            self._declare("Draw — board full", MUTED)
-            return
-        self.to_play = -player
-        self.busy = False
-        self._draw()
-        self._advance()
-
-    def _declare(self, text, color):
-        self.game_over = True
-        self.busy = False
-        self.status.set(text)
-        self._status_color(color)
-        self._banner(text, color)
-        self._update_takeback()  # allow undoing a decisive move to keep playing
+    def _land(self, col):
+        # Commit the move: any taken-back "future" is discarded, then advance.
+        self.line = self.line[:self.cursor]
+        self.line.append(col)
+        self.cursor += 1
+        self._apply_cursor()
+        self._render_after_move()
 
     def _animate(self, col, row, player, on_done):
         cx = self.MARGIN + col * self.CELL + self.CELL / 2
@@ -555,6 +624,8 @@ class App:
         root.bind("<Return>", self._on_return)
         for seq in ("<Left>", "<BackSpace>", "<Control-z>"):
             root.bind(seq, self._on_takeback)
+        for seq in ("<Right>", "<Control-y>"):
+            root.bind(seq, self._on_forward)
         self._show_setup()
 
     def _on_return(self, _event):
@@ -567,6 +638,11 @@ class App:
         # so text entries on the setup screen keep their normal behaviour).
         if isinstance(self.current, GameScreen):
             self.current.take_back()
+
+    def _on_forward(self, _event):
+        # →/Ctrl+Y move forward again over taken-back moves.
+        if isinstance(self.current, GameScreen):
+            self.current.redo()
 
     def _style(self):
         style = ttk.Style()
