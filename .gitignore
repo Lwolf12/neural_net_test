@@ -1,0 +1,38 @@
+.env/
+.venv/
+venv/
+env/
+# Python cache files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# Build/dist artifacts
+data/
+dist/
+build/
+*.egg-info/
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Connect 4 runtime files
+.play_settings.json
+train_log.txt
+
+# Game-specific (adjust as needed)
+# audio
+audio/
+logs/
+images/
+last_user.txt
+window_geometry.txt
+voice_xlate.db
